@@ -5,4 +5,6 @@ elasticsearch==7.15.0
 elasticsearch-dsl==7.4.0
 ciso8601==2.2.0
 scalpl==0.4.2
-stix-pattern-translator==0.2.0
+stix-shifter==3.5.6
+stix-shifter-modules-elastic-ecs==3.5.6
+stix-shifter-utils==3.5.6

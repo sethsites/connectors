@@ -6,7 +6,7 @@ from elasticsearch_dsl import Search
 from pycti import OpenCTIConnectorHelper
 from threading import Event, Thread
 from managers import (IncidentManager, ElasticsearchHelper, EnvironmentManager, RelationshipManager, MyIncident)
-from stix2.v21 import IPv4Address, AttackPattern, KillChainPhase
+from stix2.v21 import IPv4Address, AttackPattern, KillChainPhase, Tool
 from scalpl import Cut
 
 
@@ -60,6 +60,38 @@ class Scanner(Thread):
                 kill_chain_phases.append(kcp["standard_id"])
         return {"attack_pattern": chosen_attack_pattern, "kill_chain_phases": kill_chain_phases}
 
+    def link_tool(self, my_incident: MyIncident, tool: Tool, scan):
+        self.env_manager.add_item_to_report(tool["standard_id"])
+        tool_relationships = self.helper.api.stix_core_relationship.list(
+            relationship_type="uses",
+            fromId=my_incident.stix_id,
+            toId=tool["standard_id"]
+        )
+        if len(tool_relationships) == 0:
+            tool_relationship = self.helper.api.stix_core_relationship.create(
+                relationship_type="uses",
+                fromId=my_incident.stix_id,
+                toId=tool["standard_id"],
+                start_time=scan.start.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                stop_time=scan.end.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                confidence=self.confidence,
+                createdBy=self.author
+            )
+            self.env_manager.add_item_to_report(tool_relationship["standard_id"])
+        else:
+            tool_relationship = attack_pattern_relationships[0]
+            attack_pattern_relationship = self.helper.api.stix_core_relationship.create(
+                stix_id=tool_relationship["standard_id"],
+                relationship_type="uses",
+                fromId=my_incident.stix_id,
+                toId=tool["standard_id"],
+                start_time=scan.start.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                stop_time=scan.end.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                confidence=self.confidence,
+                update=True,
+                createdBy=self.author
+            )
+
     def link_attack_pattern(self, my_incident: MyIncident, attack_pattern: AttackPattern, scan,
                             kill_chain_phases: [KillChainPhase]):
         self.env_manager.add_item_to_report(attack_pattern["standard_id"])
@@ -75,7 +107,7 @@ class Scanner(Thread):
                 toId=attack_pattern["standard_id"],
                 killChainPhases=kill_chain_phases,
                 start_time=scan.start.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-                stop_time=scan.last_event.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                stop_time=scan.end.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
                 confidence=self.confidence,
                 createdBy=self.author
             )
@@ -89,7 +121,7 @@ class Scanner(Thread):
                 toId=attack_pattern["standard_id"],
                 killChainPhases=kill_chain_phases,
                 start_time=scan.start.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-                stop_time=scan.last_event.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                stop_time=scan.end.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
                 confidence=self.confidence,
                 update=True,
                 createdBy=self.author

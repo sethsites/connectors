@@ -11,11 +11,10 @@ from elasticsearch_dsl import Search
 from managers import ElasticsearchHelper, IncidentManager, RelationshipManager, EnvironmentManager
 from pycti import OpenCTIConnectorHelper, get_config_variable
 from stix_helper import StixHelper
-from scanners import (PingScanner, NmapScanner, ModbusScanner, SshScanner)
+from scanners import (PingScanner, NmapScanner, ModbusScanner, SshScanner, IndicatorScanner)
 from conf import defaults
 from utils import dict_merge, remove_nones
 from scalpl import Cut
-from stix2patterns_translator.translator import *
 
 
 def build_public_network_query(environment: dict) -> dict:
@@ -98,21 +97,28 @@ class SethSitesConnector:
                                                 self.environment_manager)
         self.incidents = []
 
-        self.nmap_scanner = NmapScanner(self.config, self.environment_manager, self.elasticsearch, self.helper,
-                                        self.incident_manager, self.relationship_manager, self.shutdown_event)
+
         self.ssh_scanner = SshScanner(self.config, self.environment_manager, self.elasticsearch, self.helper,
                                       self.incident_manager, self.relationship_manager, self.shutdown_event)
+        self.nmap_scanner = NmapScanner(self.config, self.environment_manager, self.elasticsearch, self.helper,
+                                        self.incident_manager, self.relationship_manager, self.ssh_scanner,
+                                        self.shutdown_event)
         self.ping_scanner = PingScanner(self.config, self.environment_manager, self.elasticsearch, self.helper,
                                         self.incident_manager, self.relationship_manager, self.ssh_scanner,
                                         self.shutdown_event)
+        self.indicator_scanner = IndicatorScanner(self.config, self.environment_manager, self.elasticsearch,
+                                                  self.helper, self.incident_manager, self.relationship_manager,
+                                                  self.shutdown_event)
         self.modbus_scanner = ModbusScanner(self.config, self.environment_manager, self.elasticsearch, self.helper,
-                                            self.incident_manager, self.relationship_manager, self.shutdown_event)
+                                            self.incident_manager, self.relationship_manager, self.ssh_scanner,
+                                            self.shutdown_event)
 
         self.scanners = {
             "nmap": self.nmap_scanner,
             "ping": self.ping_scanner,
             "modbus": self.modbus_scanner,
-            "ssh": self.ssh_scanner
+            "ssh": self.ssh_scanner,
+            "indicator": self.indicator_scanner
         }
         self.scanners["ssh"] = SshScanner(self.config, self.environment_manager, self.elasticsearch, self.helper,
                                           self.incident_manager, self.relationship_manager, self.shutdown_event)
@@ -227,14 +233,14 @@ class SethSitesConnector:
         self.helper.log_info("Connector building our environment if it doesn't exist ...")
         self.environment_manager.check_environment()
 
-        self.shutdown_event.clear()
         self.scanners["modbus"].start()
         self.scanners["ssh"].start()
         self.scanners["nmap"].start()
         self.scanners["ping"].start()
+        # self.scanners["indicator"].start()
 
         self.helper.log_info("Connector searching for more data...")
-        while True:
+        while threading.active_count() > 1:
             try:
                 # Get the current timestamp and check
                 timestamp = int(time.time())

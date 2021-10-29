@@ -268,6 +268,24 @@
             "id": "ipv4-addr--4429faa4-3fc7-54d5-8e05-a271df116a4c",
             "ip_address": "192.168.50.249",
             "roles": ["ping master"]
+          },
+          {
+            "desc": "Ping host",
+            "id": "ipv4-addr--4429faa4-3fc7-54d5-8e05-a271df116a4b",
+            "ip_address": "192.168.50.254",
+            "roles": ["ping master"]
+          },
+          {
+            "desc": "Ping host",
+            "id": "ipv4-addr--4429faa4-3fc7-54d5-8e05-a271df116a4d",
+            "ip_address": "192.168.60.254",
+            "roles": ["ping master"]
+          },
+          {
+            "desc": "Ping host",
+            "id": "ipv4-addr--4429faa4-3fc7-54d5-8e05-a271df116a4e",
+            "ip_address": "192.168.51.254",
+            "roles": ["ping master"]
           }
         ]
       },

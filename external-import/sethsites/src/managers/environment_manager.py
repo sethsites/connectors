@@ -172,22 +172,16 @@ class EnvironmentManager:
             report = self.environment["report"]
             self.report = report["id"]
             self.helper.log_debug(f"Processing report {report}")
-            reports = self.helper.api.report.read(
-                filters={"key": "name", "values": [report["name"]]}
+            created_report = self.helper.api.report.create(
+                stix_id=report["id"],
+                name=report["name"],
+                description=report["description"],
+                createdBy=self.author,
+                report_types=["internal-report"],
+                published=datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                confidence=self.confidence
             )
-            if reports:
-                self.helper.log_info(f"Found {reports}")
-            else:
-                created_report = self.helper.api.report.create(
-                    stix_id=report["id"],
-                    name=report["name"],
-                    description=report["description"],
-                    createdBy=self.author,
-                    report_types=["internal-report"],
-                    published=datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-                    confidence=self.confidence
-                )
-                self.helper.log_debug(f"Response {created_report}")
+            self.helper.log_debug(f"Response {created_report}")
         for city in self.environment["cities"]:
             self.helper.log_debug(f"Processing city {city}")
             cti_city = self.helper.api.location.list(

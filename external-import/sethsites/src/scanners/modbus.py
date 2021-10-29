@@ -9,7 +9,7 @@ from elasticsearch import Elasticsearch
 from elasticsearch_dsl import Search
 from pycti import OpenCTIConnectorHelper, get_config_variable
 from stix2.v21 import IPv4Address, IPv6Address
-from scanners import Scanner
+from scanners import Scanner, SshScanner
 from managers import IncidentManager, EnvironmentManager, RelationshipManager, MyIncident
 from scalpl import Cut
 
@@ -39,8 +39,8 @@ class ModbusScan:
         self.targets = {}
         self.start_offset = start - self.fudge_time
         self.start = start
-        self.last_event = end if end is not None else start
-        self.end_offset = self.last_event + self.fudge_time
+        self.end = end if end is not None else start
+        self.end_offset = self.end + self.fudge_time
         self.hits = 1
         self.flood = False
         self.scan = False
@@ -53,7 +53,7 @@ class ModbusScan:
         self.start = start
 
     def setEndTime(self, end: datetime):
-        self.last_event = end
+        self.end = end
         self.end_offset = end + self.fudge_time
 
 
@@ -76,11 +76,13 @@ class ModbusScanner(Scanner):
                  helper: OpenCTIConnectorHelper,
                  incident_manager: IncidentManager,
                  relationship_manager: RelationshipManager,
+                 ssh_scanner: SshScanner,
                  shutdown_event: Event):
         super(ModbusScanner, self).__init__(config, env_manager, es, helper, incident_manager, relationship_manager,
                                             shutdown_event)
+        self.ssh_scanner = ssh_scanner
         self.state_tracking_token = "modbus_scanner_last_run"
-        self.timestamp = "zeek.modbus.ts"
+        self.timestamp = "@timestamp"
 
     def get_query(self, start: datetime = None, end: datetime = None) -> Search:
         s = Search(using=self.elasticsearch, index="filebeat*") \
@@ -165,7 +167,7 @@ class ModbusScanner(Scanner):
                     # self.incident_manager.write_incidents_to_opencti()
 
                     search2: Search = self.get_query(start=last_timestamp, end=now)
-                    search2 = search2.params(scroll='60m')
+                    search2 = search2.params(scroll='120m')
 
                     for hit in search2.scan():
                         timestamp = hit.zeek.modbus.ts
@@ -184,7 +186,7 @@ class ModbusScanner(Scanner):
 
                                 if ts < current_scan.start:
                                     current_scan.setStartTime(ts)
-                                if ts > current_scan.last_event:
+                                if ts > current_scan.end:
                                     current_scan.setEndTime(ts)
                                 break
                         if current_scan is None:
@@ -254,6 +256,8 @@ class ModbusScanner(Scanner):
                             if my_incident.stix_id == "":
                                 my_incident = self.incident_manager.write_incident_to_opencti(my_incident)
 
+                            self.ssh_scanner.add_known_malicious_incident(malicious_host_key, my_incident)
+
                             command_counts = {}
                             for target_key in scan.targets:
                                 target = scan.targets[target_key]
@@ -275,7 +279,7 @@ class ModbusScanner(Scanner):
                                 fromId=malicious_host.id,
                                 toId=my_incident.stix_id,
                                 start_time=scan.start.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-                                stop_time=scan.last_event.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                                stop_time=scan.end.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
                                 confidence=self.confidence,
                                 createdBy=self.author,
                                 description=description
@@ -292,7 +296,7 @@ class ModbusScanner(Scanner):
                                         fromId=my_incident.stix_id,
                                         toId=ip_sector,
                                         start_time=scan.start.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-                                        stop_time=scan.last_event.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                                        stop_time=scan.end.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
                                         confidence=self.confidence,
                                         createdBy=self.author
                                     )

@@ -80,7 +80,7 @@ class IncidentManager:
             first_seen = start_date.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
             last_seen = end_date.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
             end_string = end_date.strftime("%Y-%m-%d %H:%M:%S")
-            incident.name = f"Incident from {start_string} to {end_string}"
+            incident.name = f"Incident from {first_seen} to {last_seen}"
             if incident.stix_id != "":
                 stix_incident = self.helper.api.incident.create(
                     stix_id=incident.stix_id,

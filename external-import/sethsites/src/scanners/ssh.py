@@ -34,9 +34,9 @@ class SshHost:
 
 
 class FakeScan:
-    def __init__(self, start: datetime, last_event: datetime):
+    def __init__(self, start: datetime, end: datetime):
         self.start = start
-        self.last_event = last_event
+        self.end = end
 
 
 # The ssh scanner uses failed login authentications from zeek ssh logs to identify brute force ssh attempts.
@@ -71,10 +71,10 @@ class SshScanner(Scanner):
             s = s.query("match", source__ip=pubnet)\
                 .query("match", destination__ip=pubnet)
 
-        s.sort("zeek.connection.ts")
+        s.sort("@timestamp")
         s.extra(track_total_hits=True)
 
-        s = self.es_helper.set_time_range(s, "zeek.connection.ts", start, end)
+        s = self.es_helper.set_time_range(s, "@timestamp", start, end)
 
         return s
 
@@ -86,10 +86,10 @@ class SshScanner(Scanner):
             s = s.query("match", source__ip=pubnet) \
                 .exclude("match", destination__ip=pubnet)
 
-        s.sort("zeek.connection.ts")
+        s.sort("@timestamp")
         s.extra(track_total_hits=True)
 
-        s = self.es_helper.set_time_range(s, "zeek.connection.ts", start, end)
+        s = self.es_helper.set_time_range(s, "@timestamp", start, end)
 
         return s
 
@@ -105,12 +105,13 @@ class SshScanner(Scanner):
         s.sort("zeek.ssh.ts")
         s.extra(track_total_hits=True)
 
-        s = self.es_helper.set_time_range(s, "zeek.ssh.ts", start, end)
+        s = self.es_helper.set_time_range(s, "@timestamp", start, end)
 
         return s
 
     def process_search(self, search: Search):
         malicious_hosts: dict[str, SshHost] = {}
+        search = search.params(scroll='120m')
         for hit in search.scan():
             ts = hit["@timestamp"]
             timestamp = ciso8601.parse_datetime(ts)
@@ -206,7 +207,8 @@ class SshScanner(Scanner):
                     createdBy=self.author,
                     description=description
                 )
-                self.env_manager.add_item_to_report(relationship["standard_id"])
+                if relationship is not None:
+                    self.env_manager.add_item_to_report(relationship["standard_id"])
 
                 fake_scan = FakeScan(target.start, target.end)
                 self.link_attack_pattern(my_incident,
@@ -233,8 +235,8 @@ class SshScanner(Scanner):
                         confidence=self.confidence,
                         createdBy=self.author
                     )
-
-                    self.env_manager.add_item_to_report(relationship["standard_id"])
+                    if relationship is not None:
+                        self.env_manager.add_item_to_report(relationship["standard_id"])
 
                 for threat_actor in self.env_manager.threat_actors:
                     relationship = self.relationship_manager.find_or_create_relationship(
@@ -287,7 +289,8 @@ class SshScanner(Scanner):
                         number_observed=1,
                         confidence=self.confidence
                     )
-                    self.env_manager.add_item_to_report(observed_data["standard_id"])
+                    if observed_data is not None:
+                        self.env_manager.add_item_to_report(observed_data["standard_id"])
                     description = f"{malicious_host_key} initiated ssh connections to {target.ip_address} " + \
                                   f"during this attempt.  There were {target.auth_failures} authentication failures."
 

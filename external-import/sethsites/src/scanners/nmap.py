@@ -1,14 +1,14 @@
 import re
 import ciso8601
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 from threading import Event
 
 import pytz
 from elasticsearch import Elasticsearch
 from elasticsearch_dsl import Search
 from pycti import OpenCTIConnectorHelper
-from scanners import Scanner
+from scanners import Scanner, SshScanner
 from managers import IncidentManager, MyIncident, EnvironmentManager, RelationshipManager
 from scalpl import Cut
 from stix2.v21 import IPv4Address, IPv6Address
@@ -31,14 +31,23 @@ class NmapScanTarget:
 
 
 class NmapScan:
-    def __init__(self, start: datetime, end: datetime, incident: MyIncident):
-        self.period_start: datetime = start
+    def __init__(self, start: datetime, end: datetime, incident: MyIncident, buffer: timedelta):
+        self.period_start: datetime = start - buffer
         self.start: datetime = start
-        self.last_event: datetime = end
-        self.period_end: datetime = end
+        self.end: datetime = end
+        self.period_end: datetime = end + buffer
         self.targets: dict[str: NmapScanTarget] = {}
         self.incident = incident
         self.start_end_reset = False
+        self.buffer = buffer
+
+    def setStartTime(self, start: datetime):
+        self.period_start = start - self.buffer
+        self.start = start
+
+    def setEndTime(self, end: datetime):
+        self.end = end
+        self.period_end = end + self.buffer
 
 
 class NmapScanHost:
@@ -60,9 +69,12 @@ class NmapScanner(Scanner):
                  helper: OpenCTIConnectorHelper,
                  incident_manager: IncidentManager,
                  relationship_manager: RelationshipManager,
+                 ssh_scanner: SshScanner,
                  shutdown_event: Event):
         super(NmapScanner, self).__init__(config, env_manager, es, helper, incident_manager, relationship_manager,
                                           shutdown_event)
+        self.ssh_scanner = ssh_scanner
+        self.buffer = timedelta(seconds=float(self.config.get("scanner.ping.time_sensitivity", 300)))
         self.state_tracking_token = "nmap_scanner_last_run"
 
     def get_query(self, start: datetime = None, end: datetime = None) -> Search:
@@ -70,7 +82,9 @@ class NmapScanner(Scanner):
             .filter("match", network__transport="tcp") \
             .filter("match", zeek__connection__state="REJ")
         s = self.add_exclude_ignored_networks_to_search(s)
-        s = self.es_helper.set_time_range(s, "zeek.connection.ts", start, end)
+        s = self.es_helper.set_time_range(s, "@timestamp", start, end)
+        s.aggs.bucket("source", "terms", field="source.ip", size=999999) \
+            .bucket("history", "date_histogram", field="@timestamp", fixed_interval="1m", min_doc_count=10)
         return s
 
     def get_agg_query(self, start: datetime = None, end: datetime = None) -> Search:
@@ -78,9 +92,9 @@ class NmapScanner(Scanner):
             .filter("match", network__transport="tcp") \
             .filter("match", zeek__connection__state="REJ")
         s = self.add_exclude_ignored_networks_to_search(s)
-        s = self.es_helper.set_time_range(s, "zeek.connection.ts", start, end)
+        s = self.es_helper.set_time_range(s, "@timestamp", start, end)
         s.aggs.bucket("source", "terms", field="source.ip", size=999999) \
-            .bucket("history", "date_histogram", field="zeek.connection.ts", fixed_interval="1m", min_doc_count=100)
+            .bucket("history", "date_histogram", field="@timestamp", fixed_interval="1m", min_doc_count=10)
         return s
 
     def run(self) -> None:
@@ -122,7 +136,9 @@ class NmapScanner(Scanner):
                                     nmap_scan = NmapScan(
                                         datetime.fromtimestamp(current_incident["start_time"] / 1000, tz=pytz.UTC),
                                         datetime.fromtimestamp(current_incident["end_time"] / 1000, tz=pytz.UTC),
-                                        my_incident)
+                                        my_incident,
+                                        self.buffer
+                                    )
                                     malicious_host.scans.append(nmap_scan)
                                     current_incident = {}
                             else:
@@ -134,7 +150,7 @@ class NmapScanner(Scanner):
                     # malicious_hosts: dict[str: NmapScanHost] = {}
 
                     search: Search = self.get_agg_query(start=last_timestamp, end=now)
-
+                    search = search.params(scroll='120m')
                     for hit in search.scan():
                         ts = hit.zeek.connection.ts
                         timestamp = ciso8601.parse_datetime(ts)
@@ -146,28 +162,31 @@ class NmapScanner(Scanner):
                             malicious_host = NmapScanHost(hit.source.ip)
                             malicious_hosts[hit.source.ip] = malicious_host
 
-                        current_scan = None
+                        current_scan: NmapScan = None
                         for scan in malicious_host.scans:
                             # self.helper.log_info(f"{scan.start} {ciso8601.parse_datetime(ts)} {scan.end}")
                             if scan.period_start < timestamp < scan.period_end:
                                 current_scan = scan
                                 break
-                        if current_scan is not None:
+                        if current_scan is None:
+                            current_scan = NmapScan(timestamp, timestamp, None, self.buffer)
+                            malicious_host.scans.append(current_scan)
+                        else:
                             if timestamp < current_scan.start:
-                                current_scan.start = timestamp
-                            if timestamp > current_scan.last_event:
-                                current_scan.last_event = timestamp
-                            if hit.destination.ip in current_scan.targets:
-                                target = current_scan.targets[hit.destination.ip]
-                                target.hits += 1
+                                current_scan.setStartTime(timestamp)
+                            if timestamp > current_scan.end:
+                                current_scan.setEndTime(timestamp)
+                        if hit.destination.ip in current_scan.targets:
+                            target = current_scan.targets[hit.destination.ip]
+                            target.hits += 1
 
-                                if timestamp < target.start:
-                                    target.start = timestamp
-                                if timestamp > target.end:
-                                    target.end = timestamp
-                            else:
-                                target = NmapScanTarget(hit.destination.ip, timestamp)
-                                current_scan.targets[hit.destination.ip] = target
+                            if timestamp < target.start:
+                                target.start = timestamp
+                            if timestamp > target.end:
+                                target.end = timestamp
+                        else:
+                            target = NmapScanTarget(hit.destination.ip, timestamp)
+                            current_scan.targets[hit.destination.ip] = target
 
                             if "port" in hit.destination:
                                 if hit.destination.port not in target.ports:
@@ -205,16 +224,18 @@ class NmapScanner(Scanner):
                         self.helper.log_info(f"{malicious_host.id}")
                         for scan in malicious_host.scans:
                             my_incident = self.incident_manager.find_or_create_incident(scan.start.timestamp() * 1000,
-                                                                                        scan.last_event.timestamp() * 1000)
+                                                                                        scan.end.timestamp() * 1000)
                             if my_incident.stix_id == "":
                                 self.incident_manager.write_incident_to_opencti(my_incident)
+
+                            self.ssh_scanner.add_known_malicious_incident(malicious_host_key, my_incident)
 
                             relationship = self.relationship_manager.find_or_create_relationship(
                                 relationship_type="related-to",
                                 fromId=malicious_host.id,
                                 toId=my_incident.stix_id,
                                 start_time=scan.start.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-                                stop_time=scan.last_event.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                                stop_time=scan.end.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
                                 confidence=self.confidence,
                                 createdBy=self.author
                             )
