@@ -232,15 +232,21 @@ class PingScanner(Scanner):
                 search = self.get_follow_up_query(malicious_host_key, scan.start, scan.end)
                 search = search.execute()
 
-                for item in search.aggregations.destination.buckets:
-                    self.helper.log_info(f"Processing {item.key} pinged {item.doc_count} times")
+                try:
+                    for item in search.aggregations.destination.buckets:
+                        self.helper.log_info(f"Processing {item.key} pinged {item.doc_count} times")
 
-                    target = ScanTarget(item.key, ciso8601.parse_datetime(item.min_date.value_as_string))
-                    target.end = ciso8601.parse_datetime(item.max_date.value_as_string)
-                    scan.targets[item.key] = target
-                    target.hits = item.doc_count
+                        if "min_date" in item:
+                            target = ScanTarget(item.key, ciso8601.parse_datetime(item.min_date.value_as_string))
+                            target.end = ciso8601.parse_datetime(item.max_date.value_as_string)
+                        else:
+                            target = ScanTarget(item.key,scan.start)
+                            target.end = scan.end
 
-
+                        scan.targets[item.key] = target
+                        target.hits = item.doc_count
+                except Exception:
+                    pass
         return malicious_hosts
 
     def process_nmap_results(self, malicious_hosts):
